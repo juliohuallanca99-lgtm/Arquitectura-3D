@@ -89,6 +89,9 @@
     .agregar { padding: 13px 16px; }
   }
   @media (prefers-reduced-motion: reduce) { .total.pulso { animation: none; } }
+  .enlaces { position: absolute; top: 42px; left: 22px; display: flex; gap: 14px; font-size: 13px; z-index: 2; }
+  .enlaces a { color: var(--acento, #b5532f); background: rgba(255,255,255,.75); padding: 4px 10px; border-radius: 99px; border: 1px solid var(--linea, #dedad1); text-decoration: none; }
+  .enlaces a:hover { text-decoration: underline; }
 </style>
 </head>
 <body>
@@ -96,6 +99,7 @@
   <div class="escena">
     <div id="visor" aria-label="Vista 3D del producto. Arrastra para girar."></div>
     <div class="marca">Prototipo · Etapa 1</div>
+    <nav class="enlaces" aria-label="Otras páginas"><a href="index.html">Polo</a><a href="estudio.html">Estudio 3D</a></nav>
     <div id="pista">Arrastra para girar · pellizca o usa la rueda para acercar</div>
   </div>
 
