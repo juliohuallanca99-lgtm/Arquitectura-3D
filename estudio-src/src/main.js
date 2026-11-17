@@ -1,9 +1,11 @@
-// Estudio 3D — Etapa 1: visor, importación de GLB, cámara completa y biblioteca local.
+// Estudio 3D — Etapas 1 y 2: visor, importación de GLB, cámara, biblioteca local y diseños sobre el modelo.
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
+import { DecalGeometry } from 'three/addons/geometries/DecalGeometry.js';
+import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { bd } from './biblioteca.js';
 
 const $ = (id) => document.getElementById(id);
@@ -163,7 +165,6 @@ function finAnim() {
   controls.enabled = true;
   controls.update();
 }
-renderer.domElement.addEventListener('pointerdown', () => { if (anim) finAnim(); }, true);
 
 function vista(nombre, animar = true) {
   if (!modelo) return;
@@ -254,9 +255,11 @@ function ponerModelo(obj, info) {
     scene.remove(modelo);
     liberar(modelo);
   }
+  vaciarDisenos();
   modelo = obj;
   scene.add(modelo);
   modelo.updateMatrixWorld(true);
+  prepararMallas();
   caja.setFromObject(modelo);
   if (caja.isEmpty()) caja.set(new THREE.Vector3(-0.5, -0.5, -0.5), new THREE.Vector3(0.5, 0.5, 0.5));
   caja.getCenter(centro);
@@ -282,6 +285,7 @@ function ponerModelo(obj, info) {
   setTimeout(() => { $('pista').hidden = true; }, 7000);
   pintarModelo();
   pintarCamaras();
+  pintarDisenos();
   pintarLista();
 }
 
@@ -290,6 +294,7 @@ function pintarModelo() {
   $('sin-modelo').hidden = hay;
   $('con-modelo').hidden = !hay;
   $('bloque-camaras').hidden = !hay;
+  $('bloque-disenos').hidden = !hay;
   if (!hay) return;
   const d = actual.datos;
   $('nombre').value = actual.nombre;
@@ -370,8 +375,22 @@ function abrirEjemplo() {
 function conRejillaOculta(fn) {
   const v = rejilla && rejilla.visible;
   if (rejilla) rejilla.visible = false;
-  try { return fn(); } finally { if (rejilla) rejilla.visible = v; }
+  if (marco) marco.visible = false;
+  try { return fn(); } finally {
+    if (rejilla) rejilla.visible = v;
+    if (marco) marco.visible = true;
+  }
 }
+
+function descargar(url, nombre) {
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = nombre;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+const nombreArchivo = () => (actual.nombre || 'modelo').replace(/[^\w\-áéíóúñ ]+/gi, '_');
 
 function miniatura() {
   const L = 224;
@@ -397,12 +416,7 @@ function captura() {
     renderer.render(scene, cam);
     return renderer.domElement.toDataURL('image/png');
   });
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = (actual.nombre || 'modelo').replace(/[^\w\-áéíóúñ ]+/gi, '_') + '.png';
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
+  descargar(url, nombreArchivo() + '.png');
   estado('Captura descargada con fondo transparente.', 'ok');
 }
 
@@ -423,6 +437,7 @@ async function guardar() {
     actual.fecha = Date.now();
     actual.miniatura = miniatura();
     await bd.guardar(ficha(), actual.bytes);
+    await bd.ponerDisenos(actual.id, datosDisenos());
     estado('Guardado en la biblioteca de este navegador.', 'ok');
   } catch (e) {
     console.error(e);
@@ -510,6 +525,13 @@ async function abrirDeBiblioteca(id) {
   pintarModelo();
   pintarCamaras();
   pintarLista();
+  const gen = generacion;
+  const guardados = (await bd.disenos(id)) || [];
+  for (const dato of guardados) {
+    if (gen !== generacion) return;
+    try { await montarDiseno(dato, gen); } catch (e) { console.error(e); }
+  }
+  pintarDisenos();
 }
 
 // ---------------------------------------------------------------- Cámaras guardadas
@@ -594,7 +616,9 @@ escena.addEventListener('drop', (e) => {
   e.preventDefault();
   dentro = 0;
   escena.classList.remove('arrastrando');
-  abrirArchivo(e.dataTransfer.files[0]);
+  const archivo = e.dataTransfer.files[0];
+  if (archivo && /^image\//.test(archivo.type)) agregarDiseno(archivo, e.clientX, e.clientY);
+  else abrirArchivo(archivo);
 });
 window.addEventListener('dragover', (e) => e.preventDefault());
 window.addEventListener('drop', (e) => e.preventDefault());
@@ -608,13 +632,429 @@ window.addEventListener('keydown', (e) => {
   else if (k === '5') usarOrto(cam !== orto);
   else if (k === 'g') alternarRejilla();
   else if (k === 'r') alternarGiro();
+  else if (k === 'escape') seleccionar(null);
+  else if ((k === 'delete' || k === 'backspace') && elegido) quitarDiseno(elegido);
 });
+
+// ---------------------------------------------------------------- Diseños sobre el modelo
+// Cada diseño es una imagen proyectada sobre la superficie (calcomanía). Se mueve arrastrándola.
+const lienzo = renderer.domElement;
+const capa = new THREE.Group();
+capa.name = 'Diseños';
+scene.add(capa);
+const rayo = new THREE.Raycaster();
+const ayuda = new THREE.Object3D();
+let mallas = [];
+let disenos = [];
+let elegido = null;
+let marco = null;
+let arrastre = null;
+let puntero = null;
+let generacion = 0;
+let guardadoPendiente = 0;
+
+function prepararMallas() {
+  mallas = [];
+  modelo.traverse((o) => {
+    if (!o.isMesh || !o.geometry.attributes.position) return;
+    if (!o.geometry.attributes.normal) {
+      // Sin normales el modelo se ve facetado; se conservan caras planas para no cambiar su aspecto.
+      const plana = o.geometry.index ? o.geometry.toNonIndexed() : o.geometry;
+      plana.computeVertexNormals();
+      if (plana !== o.geometry) o.geometry.dispose();
+      o.geometry = plana;
+    }
+    const g = o.geometry;
+    if (!g.boundingBox) g.computeBoundingBox();
+    mallas.push({ malla: o, caja: g.boundingBox.clone().applyMatrix4(o.matrixWorld) });
+  });
+}
+
+function vaciarDisenos() {
+  generacion++;
+  clearTimeout(guardadoPendiente);
+  for (const d of disenos) soltarDiseno(d);
+  disenos = [];
+  elegido = null;
+  ponerMarco();
+}
+function soltarDiseno(d) {
+  for (const m of d.grupo.children) m.geometry.dispose();
+  capa.remove(d.grupo);
+  d.material.map.dispose();
+  d.material.dispose();
+}
+
+function ndc(x, y) {
+  const r = lienzo.getBoundingClientRect();
+  return new THREE.Vector2(((x - r.left) / r.width) * 2 - 1, -((y - r.top) / r.height) * 2 + 1);
+}
+function golpeModelo() {
+  const h = rayo.intersectObjects(mallas.map((m) => m.malla), false)[0];
+  if (!h || !h.face) return null;
+  return {
+    pos: h.point.clone(), dist: h.distance,
+    normal: h.face.normal.clone().transformDirection(h.object.matrixWorld),
+  };
+}
+function tocarModelo(x, y) {
+  rayo.setFromCamera(ndc(x, y), cam);
+  return golpeModelo();
+}
+function tocarDiseno(x, y) {
+  rayo.setFromCamera(ndc(x, y), cam);
+  const hs = rayo.intersectObjects(capa.children, true);
+  if (!hs.length) return null;
+  const m = golpeModelo();
+  const margen = radio * 0.03;
+  if (m && m.dist < hs[0].distance - margen) return null; // el diseño está detrás del modelo
+  let mejor = null;
+  for (const h of hs) {
+    if (h.distance > hs[0].distance + margen) break;
+    const d = disenos.find((x) => x.grupo === h.object.parent);
+    if (d && (!mejor || disenos.indexOf(d) > disenos.indexOf(mejor))) mejor = d;
+  }
+  return mejor;
+}
+
+/** Quita las caras que miran en contra del diseño y lo separa un pelo de la superficie. */
+function ajustarCalco(g, normal) {
+  const P = g.attributes.position, N = g.attributes.normal, U = g.attributes.uv;
+  const pos = [], nor = [], uv = [];
+  const eps = radio * 0.002;
+  for (let i = 0; i < P.count; i += 3) {
+    let s = 0;
+    for (let k = 0; k < 3; k++) s += N.getX(i + k) * normal.x + N.getY(i + k) * normal.y + N.getZ(i + k) * normal.z;
+    if (s < 0.3) continue;
+    for (let k = 0; k < 3; k++) {
+      const j = i + k;
+      pos.push(P.getX(j) + N.getX(j) * eps, P.getY(j) + N.getY(j) * eps, P.getZ(j) + N.getZ(j) * eps);
+      nor.push(N.getX(j), N.getY(j), N.getZ(j));
+      uv.push(U.getX(j), U.getY(j));
+    }
+  }
+  g.dispose();
+  const r = new THREE.BufferGeometry();
+  r.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  r.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+  r.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  return r;
+}
+
+function reconstruir(d) {
+  for (const m of d.grupo.children) m.geometry.dispose();
+  d.grupo.clear();
+  const alto = d.ancho / d.aspecto;
+  const tam = new THREE.Vector3(d.ancho, alto, Math.max(d.ancho, alto));
+  ayuda.position.copy(d.pos);
+  ayuda.lookAt(d.pos.clone().add(d.normal));
+  ayuda.rotateZ(rad(d.giro));
+  const alcance = tam.length() / 2;
+  for (const m of mallas) {
+    if (m.caja.distanceToPoint(d.pos) > alcance) continue;
+    const g = ajustarCalco(new DecalGeometry(m.malla, d.pos, ayuda.rotation, tam), d.normal);
+    if (!g.attributes.position.count) { g.dispose(); continue; }
+    const malla = new THREE.Mesh(g, d.material);
+    malla.name = d.nombre;
+    d.grupo.add(malla);
+  }
+  ordenar();
+  if (d === elegido) ponerMarco();
+}
+function ordenar() {
+  disenos.forEach((d, i) => { for (const m of d.grupo.children) m.renderOrder = i + 1; });
+}
+
+function ponerMarco() {
+  if (marco) {
+    scene.remove(marco);
+    marco.geometry.dispose();
+    marco.material.dispose();
+    marco = null;
+  }
+  if (!elegido || !elegido.grupo.children.length) return;
+  marco = new THREE.BoxHelper(elegido.grupo, 0xb5532f);
+  scene.add(marco);
+}
+
+function seleccionar(d) {
+  if (elegido === d) return;
+  elegido = d;
+  ponerMarco();
+  pintarDisenos();
+}
+
+function cargarImagen(src) {
+  return new Promise((ok, mal) => {
+    const i = new Image();
+    i.onload = () => ok(i);
+    i.onerror = () => mal(new Error('No se pudo leer la imagen'));
+    i.src = src;
+  });
+}
+
+/** Reduce la imagen a un máximo de 1536 px y la devuelve como texto, para guardarla junto al modelo. */
+async function normalizarImagen(archivo) {
+  const url = URL.createObjectURL(archivo);
+  try {
+    const img = await cargarImagen(url);
+    const esc = Math.min(1, 1536 / Math.max(img.naturalWidth, img.naturalHeight));
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(img.naturalWidth * esc));
+    c.height = Math.max(1, Math.round(img.naturalHeight * esc));
+    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+    return archivo.type === 'image/jpeg' ? c.toDataURL('image/jpeg', 0.9) : c.toDataURL('image/png');
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+async function montarDiseno(dato, gen = generacion) {
+  const img = await cargarImagen(dato.src);
+  if (gen !== generacion) return null;
+  const tex = new THREE.Texture(img);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  tex.needsUpdate = true;
+  const d = {
+    id: dato.id, nombre: dato.nombre, src: dato.src,
+    aspecto: img.naturalWidth / img.naturalHeight,
+    pos: new THREE.Vector3().fromArray(dato.pos),
+    normal: new THREE.Vector3().fromArray(dato.normal),
+    ancho: dato.ancho, giro: dato.giro || 0,
+    material: new THREE.MeshStandardMaterial({
+      map: tex, transparent: true, depthWrite: false, roughness: 0.85, metalness: 0,
+      polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4,
+    }),
+    grupo: new THREE.Group(),
+  };
+  d.material.name = dato.nombre;
+  capa.add(d.grupo);
+  disenos.push(d);
+  reconstruir(d);
+  return d;
+}
+
+function datosDisenos() {
+  return disenos.map((d) => ({
+    id: d.id, nombre: d.nombre, src: d.src, pos: d.pos.toArray(), normal: d.normal.toArray(),
+    ancho: d.ancho, giro: d.giro,
+  }));
+}
+
+/** Tras un cambio: guarda los diseños y refresca la miniatura, si el modelo está en la biblioteca. */
+function cambioDisenos() {
+  clearTimeout(guardadoPendiente);
+  if (!actual || !actual.id) return;
+  const gen = generacion;
+  guardadoPendiente = setTimeout(async () => {
+    if (gen !== generacion || arrastre) return;
+    try {
+      await bd.ponerDisenos(actual.id, datosDisenos());
+      actual.miniatura = miniatura();
+      await actualizarFicha();
+    } catch (e) {
+      console.error(e);
+      estado('No se pudieron guardar los diseños en la biblioteca.', 'error');
+    }
+  }, 700);
+}
+
+async function agregarDiseno(archivo, x, y) {
+  if (!archivo) return;
+  if (!modelo) {
+    estado('Abre primero un modelo; después agrega el diseño.', 'error');
+    return;
+  }
+  if (!/^image\/(png|jpeg|webp)$/.test(archivo.type)) {
+    estado('Usa una imagen JPG, PNG o WebP.', 'error');
+    return;
+  }
+  let golpe = x != null ? tocarModelo(x, y) : null;
+  if (!golpe) {
+    // Busca superficie desde el centro de la vista hacia afuera.
+    const r = lienzo.getBoundingClientRect();
+    const puntos = [];
+    for (let i = -4; i <= 4; i++) for (let j = -4; j <= 4; j++) puntos.push([i, j]);
+    puntos.sort((p, q) => p[0] * p[0] + p[1] * p[1] - (q[0] * q[0] + q[1] * q[1]));
+    for (const [i, j] of puntos) {
+      golpe = tocarModelo(r.left + r.width * (0.5 + i * 0.09), r.top + r.height * (0.5 + j * 0.09));
+      if (golpe) break;
+    }
+  }
+  if (!golpe) {
+    estado('Gira el modelo para tenerlo de frente y vuelve a agregar el diseño.', 'error');
+    return;
+  }
+  const gen = generacion;
+  try {
+    const src = await normalizarImagen(archivo);
+    const d = await montarDiseno({
+      id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      nombre: archivo.name.replace(/\.[^.]+$/, '').slice(0, 40) || 'Diseño',
+      src, pos: golpe.pos.toArray(), normal: golpe.normal.toArray(), ancho: radio * 0.45, giro: 0,
+    }, gen);
+    if (!d) return;
+    elegido = null;
+    seleccionar(d);
+    cambioDisenos();
+    estado('Diseño agregado. Arrástralo sobre el modelo para moverlo.', 'ok');
+  } catch (e) {
+    console.error(e);
+    estado('No se pudo leer esa imagen.', 'error');
+  }
+}
+
+function quitarDiseno(d) {
+  soltarDiseno(d);
+  disenos = disenos.filter((x) => x !== d);
+  if (elegido === d) elegido = null;
+  ordenar();
+  ponerMarco();
+  pintarDisenos();
+  cambioDisenos();
+}
+
+async function duplicarDiseno(d) {
+  const p = d.pos.clone().project(cam);
+  const r = lienzo.getBoundingClientRect();
+  const golpe = tocarModelo(((p.x + 1) / 2) * r.width + r.left + 48, ((1 - p.y) / 2) * r.height + r.top + 24);
+  const n = await montarDiseno({
+    id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    nombre: d.nombre, src: d.src, ancho: d.ancho, giro: d.giro,
+    pos: (golpe ? golpe.pos : d.pos).toArray(), normal: (golpe ? golpe.normal : d.normal).toArray(),
+  });
+  if (!n) return;
+  seleccionar(n);
+  cambioDisenos();
+}
+
+function pintarDisenos() {
+  const ul = $('disenos');
+  ul.textContent = '';
+  for (const d of disenos) {
+    const li = document.createElement('li');
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'boton dis' + (d === elegido ? ' activo' : '');
+    b.setAttribute('aria-pressed', String(d === elegido));
+    const img = document.createElement('img');
+    img.alt = '';
+    img.src = d.src;
+    const t = document.createElement('span');
+    t.textContent = d.nombre;
+    b.append(img, t);
+    b.addEventListener('click', () => seleccionar(d === elegido ? null : d));
+    li.append(b);
+    ul.append(li);
+  }
+  $('dis-vacio').hidden = disenos.length > 0;
+  $('dis-controles').hidden = !elegido;
+  if (elegido) {
+    const pct = Math.round((elegido.ancho / (2 * radio)) * 100);
+    $('dis-tam').value = pct;
+    $('dis-tam-v').textContent = textoTam(elegido.ancho);
+    $('dis-giro').value = elegido.giro;
+    $('dis-giro-v').textContent = Math.round(elegido.giro) + '°';
+  }
+}
+const textoTam = (ancho) => (ancho * 100 >= 10 ? (ancho * 100).toFixed(0) : (ancho * 100).toFixed(1)) + ' cm de ancho';
+
+// Arrastre directo sobre el modelo. Va en fase de captura para adelantarse al giro de cámara.
+lienzo.addEventListener('pointerdown', (e) => {
+  if (anim) finAnim();
+  if (!modelo || e.button !== 0 || !disenos.length || arrastre) return;
+  const d = tocarDiseno(e.clientX, e.clientY);
+  if (!d) return;
+  seleccionar(d);
+  const p = d.pos.clone().project(cam);
+  const r = lienzo.getBoundingClientRect();
+  arrastre = {
+    d, id: e.pointerId, movido: false,
+    dx: ((p.x + 1) / 2) * r.width + r.left - e.clientX,
+    dy: ((1 - p.y) / 2) * r.height + r.top - e.clientY,
+  };
+  controls.enabled = false;
+  lienzo.setPointerCapture(e.pointerId);
+  lienzo.style.cursor = 'grabbing';
+}, true);
+lienzo.addEventListener('pointermove', (e) => {
+  if (arrastre && e.pointerId !== arrastre.id) return;
+  if (!arrastre && e.pointerType !== 'mouse') return;
+  puntero = { x: e.clientX, y: e.clientY };
+});
+function finArrastre(e) {
+  if (!arrastre || e.pointerId !== arrastre.id) return;
+  pasoPuntero();
+  const movido = arrastre.movido;
+  arrastre = null;
+  controls.enabled = true;
+  lienzo.style.cursor = '';
+  if (movido) cambioDisenos();
+}
+lienzo.addEventListener('pointerup', finArrastre);
+lienzo.addEventListener('pointercancel', finArrastre);
+
+/** Una vez por cuadro: mueve el diseño arrastrado o cambia el cursor al pasar sobre uno. */
+function pasoPuntero() {
+  if (!puntero) return;
+  const { x, y } = puntero;
+  puntero = null;
+  if (arrastre) {
+    const golpe = tocarModelo(x + arrastre.dx, y + arrastre.dy);
+    if (!golpe) return;
+    arrastre.d.pos.copy(golpe.pos);
+    arrastre.d.normal.copy(golpe.normal);
+    arrastre.movido = true;
+    reconstruir(arrastre.d);
+  } else if (disenos.length && !anim) {
+    lienzo.style.cursor = tocarDiseno(x, y) ? 'grab' : '';
+  }
+}
+
+function exportarGLB() {
+  if (!modelo) return;
+  estado('Preparando el GLB…');
+  new GLTFExporter().parse([modelo, capa], (buf) => {
+    const url = URL.createObjectURL(new Blob([buf], { type: 'model/gltf-binary' }));
+    descargar(url, nombreArchivo() + '.glb');
+    setTimeout(() => URL.revokeObjectURL(url), 20000);
+    estado(disenos.length ? 'GLB descargado con los diseños incluidos.' : 'GLB descargado.', 'ok');
+  }, (e) => {
+    console.error(e);
+    estado('No se pudo exportar el GLB.', 'error');
+  }, { binary: true });
+}
+
+$('dis-archivo').addEventListener('change', async (e) => {
+  const archivos = [...e.target.files];
+  e.target.value = '';
+  for (const a of archivos) await agregarDiseno(a);
+});
+$('dis-tam').addEventListener('input', () => {
+  if (!elegido) return;
+  elegido.ancho = (Number($('dis-tam').value) / 100) * 2 * radio;
+  $('dis-tam-v').textContent = textoTam(elegido.ancho);
+  reconstruir(elegido);
+  cambioDisenos();
+});
+$('dis-giro').addEventListener('input', () => {
+  if (!elegido) return;
+  elegido.giro = Number($('dis-giro').value);
+  $('dis-giro-v').textContent = Math.round(elegido.giro) + '°';
+  reconstruir(elegido);
+  cambioDisenos();
+});
+$('dis-duplicar').addEventListener('click', () => elegido && duplicarDiseno(elegido));
+$('dis-quitar').addEventListener('click', () => elegido && quitarDiseno(elegido));
+$('exportar').addEventListener('click', exportarGLB);
 
 // ---------------------------------------------------------------- Bucle
 function cuadro(t) {
   requestAnimationFrame(cuadro);
   if (anim) pasoAnim(t);
   else controls.update();
+  pasoPuntero();
   renderer.render(scene, cam);
 }
 requestAnimationFrame(cuadro);

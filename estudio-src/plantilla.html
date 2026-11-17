@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" href="data:,">
-<title>Estudio 3D — Etapa 1: visor e importación</title>
+<title>Estudio 3D — Etapa 2: diseños sobre el modelo</title>
 <style>
   :root {
     --fondo: #f3f0ea; --panel: #fbfaf7; --tinta: #17171a; --suave: #6b6a66;
@@ -84,6 +84,14 @@
   #camaras { list-style: none; margin: 0 0 10px; padding: 0; display: grid; gap: 6px; }
   #camaras li { display: flex; gap: 6px; }
   #camaras li .ir { flex: 1; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #disenos { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 6px; }
+  .boton.dis { width: 100%; display: grid; grid-template-columns: 36px minmax(0, 1fr); gap: 10px; align-items: center; padding: 5px 8px 5px 5px; text-align: left; }
+  .boton.dis img { width: 36px; height: 36px; object-fit: contain; border-radius: 6px; background: #e4e0d8; }
+  .boton.dis span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .deslizador { display: block; margin-top: 12px; font-size: 13px; color: var(--suave); }
+  .deslizador span { display: flex; justify-content: space-between; margin-bottom: 2px; }
+  .deslizador b { color: var(--tinta); font-weight: 600; }
+  .deslizador input { width: 100%; accent-color: var(--tinta); height: 28px; margin: 0; }
   #estado { font-size: 13px; line-height: 1.4; min-height: 18px; margin-top: 10px; }
   #estado.error { color: var(--acento); }
   #estado.ok { color: var(--ok); }
@@ -104,7 +112,7 @@
   <aside class="lado izq">
     <div class="cab">
       <h1>Estudio 3D</h1>
-      <p>Etapa 1 · Visor e importación</p>
+      <p>Etapa 2 · Diseños sobre el modelo</p>
       <nav><a href="index.html">Polo</a><a href="bolso.html">Bolso</a></nav>
     </div>
     <div class="scroll">
@@ -151,7 +159,7 @@
         </div>
       </div>
     </div>
-    <div id="soltar">Suelta el archivo para abrirlo</div>
+    <div id="soltar">Suelta el modelo GLB o la imagen del diseño</div>
     <div id="pista" hidden>Arrastra para girar · clic derecho o dos dedos para desplazar · rueda o pellizco para acercar</div>
   </main>
 
@@ -173,9 +181,27 @@
           </dl>
           <div class="fila" style="margin-top:14px">
             <button type="button" class="boton fuerte" id="guardar">Guardar en biblioteca</button>
+            <button type="button" class="boton" id="exportar">Exportar GLB</button>
           </div>
         </div>
         <div id="estado" role="status"></div>
+      </div>
+      <div class="bloque" id="bloque-disenos" hidden>
+        <h2>Diseños</h2>
+        <label><input type="file" id="dis-archivo" accept="image/png,image/jpeg,image/webp" multiple><span class="boton fuerte" style="display:inline-block">Agregar diseño</span></label>
+        <p class="nota" id="dis-vacio">Elige una imagen JPG o PNG, o arrástrala sobre el modelo: queda donde la sueltes.</p>
+        <ul id="disenos"></ul>
+        <div id="dis-controles" hidden>
+          <p class="nota">Arrastra el diseño sobre el modelo para moverlo.</p>
+          <label class="deslizador"><span>Tamaño <b id="dis-tam-v"></b></span>
+            <input type="range" id="dis-tam" min="2" max="120" step="1"></label>
+          <label class="deslizador"><span>Giro <b id="dis-giro-v"></b></span>
+            <input type="range" id="dis-giro" min="-180" max="180" step="1"></label>
+          <div class="fila" style="margin-top:10px">
+            <button type="button" class="boton" id="dis-duplicar">Duplicar</button>
+            <button type="button" class="boton" id="dis-quitar">Quitar</button>
+          </div>
+        </div>
       </div>
       <div class="bloque" id="bloque-camaras" hidden>
         <h2>Cámaras guardadas</h2>
@@ -185,7 +211,7 @@
       </div>
       <div class="bloque atajos-bloque">
         <h2>Atajos</h2>
-        <p class="atajos"><kbd>F</kbd> encuadrar · <kbd>1</kbd> frente · <kbd>2</kbd> atrás<br><kbd>3</kbd> derecha · <kbd>4</kbd> izquierda · <kbd>7</kbd> arriba<br><kbd>0</kbd> isométrica · <kbd>5</kbd> perspectiva / ortográfica<br><kbd>G</kbd> rejilla · <kbd>R</kbd> giro 360°</p>
+        <p class="atajos"><kbd>F</kbd> encuadrar · <kbd>1</kbd> frente · <kbd>2</kbd> atrás<br><kbd>3</kbd> derecha · <kbd>4</kbd> izquierda · <kbd>7</kbd> arriba<br><kbd>0</kbd> isométrica · <kbd>5</kbd> perspectiva / ortográfica<br><kbd>G</kbd> rejilla · <kbd>R</kbd> giro 360°<br><kbd>Supr</kbd> quitar diseño · <kbd>Esc</kbd> soltar selección</p>
       </div>
     </div>
   </aside>

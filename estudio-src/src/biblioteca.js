@@ -45,8 +45,12 @@ export const bd = {
     t.objectStore('archivos').put(bytes, ficha.id);
   }),
   actualizar: (ficha) => tx(['fichas'], 'readwrite', (t) => { t.objectStore('fichas').put(ficha); }),
+  // Los diseños (imágenes y su posición) van aparte de la ficha para que listar la biblioteca siga siendo ligero.
+  disenos: (id) => tx(['archivos'], 'readonly', (t) => t.objectStore('archivos').get(id + ':disenos')),
+  ponerDisenos: (id, lista) => tx(['archivos'], 'readwrite', (t) => { t.objectStore('archivos').put(lista, id + ':disenos'); }),
   borrar: (id) => tx(['fichas', 'archivos'], 'readwrite', (t) => {
     t.objectStore('fichas').delete(id);
     t.objectStore('archivos').delete(id);
+    t.objectStore('archivos').delete(id + ':disenos');
   }),
 };
