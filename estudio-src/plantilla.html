@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" href="data:,">
-<title>Estudio 3D — Etapa 2: diseños sobre el modelo</title>
+<title>Estudio 3D — Revisión y optimización para web</title>
 <style>
   :root {
     --fondo: #f3f0ea; --panel: #fbfaf7; --tinta: #17171a; --suave: #6b6a66;
@@ -95,6 +95,27 @@
   #estado { font-size: 13px; line-height: 1.4; min-height: 18px; margin-top: 10px; }
   #estado.error { color: var(--acento); }
   #estado.ok { color: var(--ok); }
+  /* Revisión para web */
+  #resumen { margin: 12px 0 0; font-size: 13.5px; font-weight: 600; }
+  #resumen:empty { display: none; }
+  #resumen.error { color: var(--acento); }
+  #resumen.aviso { color: #8a6412; }
+  #resumen.ok { color: var(--ok); }
+  #informe { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px; }
+  #informe li { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 8px; align-items: start; font-size: 12.5px; line-height: 1.4; }
+  #informe b { font-weight: 600; display: block; }
+  #informe small { color: var(--suave); display: block; }
+  #informe .ic { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; font-weight: 700; color: #fff; }
+  #informe .error .ic { background: var(--acento); }
+  #informe .aviso .ic { background: #c08a1e; }
+  #informe .info .ic { background: #8d877a; }
+  #informe .ok .ic { background: var(--ok); }
+  .optimizar { margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--linea); display: grid; gap: 8px; justify-items: start; }
+  .check { font-size: 13px; display: flex; gap: 8px; align-items: center; }
+  .check input { accent-color: var(--tinta); }
+  select { font: inherit; font-size: 13px; border: 1px solid var(--linea); border-radius: 8px; padding: 4px 6px; background: #fff; }
+  #opt-resultado .cifra { margin: 4px 0 0; font-size: 15px; font-weight: 600; color: var(--ok); font-variant-numeric: tabular-nums; }
+  #opt-resultado ul { margin: 6px 0 0; padding-left: 18px; font-size: 12.5px; line-height: 1.5; }
   kbd { font: 11.5px ui-monospace, monospace; border: 1px solid var(--linea); border-bottom-width: 2px; border-radius: 5px; padding: 0 5px; background: #fff; }
   .atajos { font-size: 12.5px; color: var(--suave); line-height: 1.9; margin: 0; }
 
@@ -112,7 +133,7 @@
   <aside class="lado izq">
     <div class="cab">
       <h1>Estudio 3D</h1>
-      <p>Etapa 2 · Diseños sobre el modelo</p>
+      <p>Diseños sobre el modelo · Revisión para web</p>
       <nav><a href="index.html">Polo</a><a href="bolso.html">Bolso</a></nav>
     </div>
     <div class="scroll">
@@ -186,6 +207,27 @@
         </div>
         <div id="estado" role="status"></div>
       </div>
+      <div class="bloque" id="bloque-revision" hidden>
+        <h2>Revisión para web</h2>
+        <div class="fila">
+          <button type="button" class="boton fuerte" id="revisar">Revisar modelo</button>
+          <button type="button" class="boton" id="ver-normales" aria-pressed="false">Ver normales</button>
+        </div>
+        <p id="resumen" role="status"></p>
+        <ul id="informe"></ul>
+        <div class="optimizar">
+          <label class="check"><input type="checkbox" id="opt-reducir"> Reducir triángulos a 30 000 si tiene más</label>
+          <label class="check">Texturas hasta
+            <select id="opt-tex">
+              <option value="1024">1024 px (celular)</option>
+              <option value="2048" selected>2048 px</option>
+            </select>
+          </label>
+          <button type="button" class="boton fuerte" id="optimizar">Optimizar para web</button>
+          <p class="nota">Crea una copia liviana (meshopt y WebP) lista para la tienda. El original no se toca.</p>
+          <div id="opt-resultado"></div>
+        </div>
+      </div>
       <div class="bloque" id="bloque-disenos" hidden>
         <h2>Diseños</h2>
         <label><input type="file" id="dis-archivo" accept="image/png,image/jpeg,image/webp" multiple><span class="boton fuerte" style="display:inline-block">Agregar diseño</span></label>
@@ -211,7 +253,7 @@
       </div>
       <div class="bloque atajos-bloque">
         <h2>Atajos</h2>
-        <p class="atajos"><kbd>F</kbd> encuadrar · <kbd>1</kbd> frente · <kbd>2</kbd> atrás<br><kbd>3</kbd> derecha · <kbd>4</kbd> izquierda · <kbd>7</kbd> arriba<br><kbd>0</kbd> isométrica · <kbd>5</kbd> perspectiva / ortográfica<br><kbd>G</kbd> rejilla · <kbd>R</kbd> giro 360°<br><kbd>Supr</kbd> quitar diseño · <kbd>Esc</kbd> soltar selección</p>
+        <p class="atajos"><kbd>F</kbd> encuadrar · <kbd>1</kbd> frente · <kbd>2</kbd> atrás<br><kbd>3</kbd> derecha · <kbd>4</kbd> izquierda · <kbd>7</kbd> arriba<br><kbd>0</kbd> isométrica · <kbd>5</kbd> perspectiva / ortográfica<br><kbd>G</kbd> rejilla · <kbd>R</kbd> giro 360° · <kbd>N</kbd> normales<br><kbd>Supr</kbd> quitar diseño · <kbd>Esc</kbd> soltar selección</p>
       </div>
     </div>
   </aside>

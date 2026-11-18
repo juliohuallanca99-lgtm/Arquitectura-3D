@@ -7,6 +7,7 @@ import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { DecalGeometry } from 'three/addons/geometries/DecalGeometry.js';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { bd } from './biblioteca.js';
+import { revisar, materialNormales } from './revision.js';
 
 const $ = (id) => document.getElementById(id);
 const rad = THREE.MathUtils.degToRad;
@@ -221,7 +222,7 @@ function medir(obj) {
     tri += g.index ? g.index.count / 3 : g.attributes.position ? g.attributes.position.count / 3 : 0;
     for (const m of Array.isArray(o.material) ? o.material : [o.material]) {
       if (!m) continue;
-      mats.add(m);
+      mats.add(m.name || m.uuid); // el cargador clona materiales de piezas sin normales
       for (const v of Object.values(m)) if (v && v.isTexture) tex.add(v);
     }
   });
@@ -251,6 +252,7 @@ function ponerRejilla() {
 }
 
 function ponerModelo(obj, info) {
+  apagarNormales();
   if (modelo) {
     scene.remove(modelo);
     liberar(modelo);
@@ -287,6 +289,9 @@ function ponerModelo(obj, info) {
   pintarCamaras();
   pintarDisenos();
   pintarLista();
+  pintarInforme(null);
+  $('opt-resultado').textContent = '';
+  $('revisar').textContent = 'Revisar modelo';
 }
 
 function pintarModelo() {
@@ -295,6 +300,7 @@ function pintarModelo() {
   $('con-modelo').hidden = !hay;
   $('bloque-camaras').hidden = !hay;
   $('bloque-disenos').hidden = !hay;
+  $('bloque-revision').hidden = !hay;
   if (!hay) return;
   const d = actual.datos;
   $('nombre').value = actual.nombre;
@@ -393,6 +399,7 @@ function descargar(url, nombre) {
 const nombreArchivo = () => (actual.nombre || 'modelo').replace(/[^\w\-áéíóúñ ]+/gi, '_');
 
 function miniatura() {
+  apagarNormales();
   const L = 224;
   const c = new THREE.PerspectiveCamera(FOV, 1, radio / 100, radio * 200);
   c.position.copy(centro).add(new THREE.Vector3(1, 0.75, 1).setLength(distanciaEncuadre(1)));
@@ -412,6 +419,7 @@ function miniatura() {
 
 function captura() {
   if (!modelo) return;
+  apagarNormales();
   const url = conRejillaOculta(() => {
     renderer.render(scene, cam);
     return renderer.domElement.toDataURL('image/png');
@@ -632,6 +640,7 @@ window.addEventListener('keydown', (e) => {
   else if (k === '5') usarOrto(cam !== orto);
   else if (k === 'g') alternarRejilla();
   else if (k === 'r') alternarGiro();
+  else if (k === 'n') alternarNormales();
   else if (k === 'escape') seleccionar(null);
   else if ((k === 'delete' || k === 'backspace') && elegido) quitarDiseno(elegido);
 });
@@ -1012,19 +1021,179 @@ function pasoPuntero() {
   }
 }
 
-function exportarGLB() {
+/** GLB de la escena actual (modelo + diseños) generado con three.js. */
+function glbDeEscena() {
+  apagarNormales();
+  return new Promise((ok, mal) => new GLTFExporter().parse([modelo, capa], ok, mal, { binary: true }));
+}
+
+function bajarGLB(buf, nombre) {
+  const url = URL.createObjectURL(new Blob([buf], { type: 'model/gltf-binary' }));
+  descargar(url, nombre + '.glb');
+  setTimeout(() => URL.revokeObjectURL(url), 20000);
+}
+
+async function exportarGLB() {
   if (!modelo) return;
+  // Sin diseños se entrega el archivo tal cual: conserva la compresión de un GLB optimizado.
+  if (!disenos.length && actual.bytes) {
+    bajarGLB(actual.bytes, nombreArchivo());
+    estado('GLB descargado.', 'ok');
+    return;
+  }
   estado('Preparando el GLB…');
-  new GLTFExporter().parse([modelo, capa], (buf) => {
-    const url = URL.createObjectURL(new Blob([buf], { type: 'model/gltf-binary' }));
-    descargar(url, nombreArchivo() + '.glb');
-    setTimeout(() => URL.revokeObjectURL(url), 20000);
+  try {
+    bajarGLB(await glbDeEscena(), nombreArchivo());
     estado(disenos.length ? 'GLB descargado con los diseños incluidos.' : 'GLB descargado.', 'ok');
-  }, (e) => {
+  } catch (e) {
     console.error(e);
     estado('No se pudo exportar el GLB.', 'error');
-  }, { binary: true });
+  }
 }
+
+// ---------------------------------------------------------------- Revisión y optimización para web
+let normales = null; // Map malla → material original, mientras «Ver normales» está activo
+
+function apagarNormales() {
+  if (!normales) return;
+  for (const [m, mat] of normales.mapa) m.material = mat;
+  normales.diag.dispose();
+  normales = null;
+  capa.visible = true;
+  const b = $('ver-normales');
+  b.classList.remove('activo');
+  b.setAttribute('aria-pressed', 'false');
+}
+
+function alternarNormales() {
+  if (!modelo) return;
+  if (normales) { apagarNormales(); return; }
+  const diag = materialNormales();
+  const mapa = new Map();
+  modelo.traverse((o) => { if (o.isMesh) { mapa.set(o, o.material); o.material = diag; } });
+  normales = { mapa, diag };
+  capa.visible = false;
+  const b = $('ver-normales');
+  b.classList.add('activo');
+  b.setAttribute('aria-pressed', 'true');
+}
+
+const ICONO = { error: '✕', aviso: '!', info: 'i', ok: '✓' };
+
+function pintarInforme(r) {
+  const ul = $('informe');
+  ul.textContent = '';
+  $('resumen').textContent = '';
+  $('resumen').className = '';
+  if (!r) return;
+  for (const it of r.items) {
+    const li = document.createElement('li');
+    li.className = it.nivel;
+    const ic = document.createElement('span');
+    ic.className = 'ic';
+    ic.setAttribute('aria-hidden', 'true');
+    ic.textContent = ICONO[it.nivel];
+    const t = document.createElement('div');
+    const b = document.createElement('b');
+    b.textContent = it.titulo;
+    t.append(b);
+    if (it.detalle) {
+      const s = document.createElement('small');
+      s.textContent = it.detalle;
+      t.append(s);
+    }
+    li.append(ic, t);
+    ul.append(li);
+  }
+  const res = $('resumen');
+  if (r.errores) {
+    res.textContent = `${r.errores} problema${r.errores > 1 ? 's' : ''} que corregir` + (r.avisos ? ` y ${r.avisos} aviso${r.avisos > 1 ? 's' : ''}` : '');
+    res.className = 'error';
+  } else if (r.avisos) {
+    res.textContent = `Sin errores · ${r.avisos} aviso${r.avisos > 1 ? 's' : ''}`;
+    res.className = 'aviso';
+  } else {
+    res.textContent = 'Listo para web';
+    res.className = 'ok';
+  }
+}
+
+function hacerRevision() {
+  if (!modelo) return;
+  const b = $('revisar');
+  b.disabled = true;
+  b.textContent = 'Revisando…';
+  // Deja pintar el texto antes del cálculo, que puede tardar un segundo en modelos grandes.
+  setTimeout(() => {
+    try {
+      pintarInforme(revisar(modelo, { peso: actual.peso, radio, caja }));
+    } catch (e) {
+      console.error(e);
+      estado('No se pudo revisar el modelo.', 'error');
+    }
+    b.disabled = false;
+    b.textContent = 'Revisar de nuevo';
+  }, 30);
+}
+
+let modOptimizar = null;
+function cargarOptimizador() {
+  // Archivo aparte para que el estudio cargue rápido; solo se descarga al optimizar.
+  const url = new URL('estudio-optimizar.js', location.href).href;
+  if (!modOptimizar) modOptimizar = import(/* @vite-ignore */ url).catch((e) => { modOptimizar = null; throw e; });
+  return modOptimizar;
+}
+
+async function optimizarWeb() {
+  if (!modelo || !actual) return;
+  const b = $('optimizar');
+  const out = $('opt-resultado');
+  b.disabled = true;
+  out.textContent = '';
+  const conDisenos = disenos.length > 0;
+  const nombreBase = actual.nombre.replace(/ \(web\)$/, '');
+  try {
+    estado('Cargando el optimizador…');
+    const { optimizar } = await cargarOptimizador();
+    const fuente = conDisenos || !actual.bytes ? await glbDeEscena() : actual.bytes;
+    const r = await optimizar(fuente, {
+      texturaMax: Number($('opt-tex').value),
+      reducir: $('opt-reducir').checked,
+      avisar: (t) => estado(t),
+    });
+    const buf = r.bytes.buffer.slice(r.bytes.byteOffset, r.bytes.byteOffset + r.bytes.byteLength);
+    const ok = await abrirBytes(buf, { nombre: nombreBase + ' (web)' });
+    if (!ok) return;
+    const pct = Math.round((1 - r.despues / r.antes) * 100);
+    const h = document.createElement('p');
+    h.className = 'cifra';
+    h.textContent = `${fmtPeso(r.antes)} → ${fmtPeso(r.despues)}` + (pct > 0 ? ` (−${pct} %)` : '');
+    const ul = document.createElement('ul');
+    for (const linea of r.informe.concat(conDisenos ? ['Los diseños quedaron fijos dentro del modelo'] : [])) {
+      const li = document.createElement('li');
+      li.textContent = linea;
+      ul.append(li);
+    }
+    const n = document.createElement('p');
+    n.className = 'nota';
+    n.textContent = 'Ya estás viendo la versión optimizada. Guárdala en la biblioteca o expórtala; el original no se tocó.';
+    out.append(h, ul, n);
+    estado('Modelo optimizado para web.', 'ok');
+    hacerRevision();
+  } catch (e) {
+    console.error(e);
+    const m = String((e && e.message) || e);
+    estado(/draco/i.test(m) ? 'Este GLB usa Draco, que el optimizador aún no abre.'
+      : /import|fetch|module/i.test(m) ? 'No se pudo cargar el optimizador. Revisa tu conexión y vuelve a intentar.'
+        : 'No se pudo optimizar este modelo.', 'error');
+  } finally {
+    b.disabled = false;
+  }
+}
+
+$('revisar').addEventListener('click', hacerRevision);
+$('ver-normales').addEventListener('click', alternarNormales);
+$('optimizar').addEventListener('click', optimizarWeb);
 
 $('dis-archivo').addEventListener('change', async (e) => {
   const archivos = [...e.target.files];
